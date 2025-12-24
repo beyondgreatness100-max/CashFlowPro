@@ -1,0 +1,457 @@
+            <div class="modal-header">
+                <h2 class="modal-title">Settle Up</h2>
+                <button class="modal-close" onclick="closeModal('settleModal')">✕</button>
+            </div>
+            <div class="modal-section">
+                <label class="modal-label">Pay To</label>
+                <div id="settleToUser" style="display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--bg-accent); border-radius: var(--radius-sm);">
+                    <div class="member-chip-avatar">?</div>
+                    <span class="member-chip-name">Select user</span>
+                </div>
+            </div>
+            <div class="modal-section">
+                <label class="modal-label">Amount</label>
+                <input type="number" class="modal-input" id="settleAmountInput" placeholder="0.00" step="0.01" min="0">
+            </div>
+            <div class="modal-section">
+                <label class="modal-label">Payment Method</label>
+                <div class="member-select">
+                    <div class="member-chip selected" onclick="selectPaymentMethod('cash', this)">💵 Cash</div>
+                    <div class="member-chip" onclick="selectPaymentMethod('bank', this)">🏦 Bank</div>
+                    <div class="member-chip" onclick="selectPaymentMethod('venmo', this)">📱 Venmo</div>
+                    <div class="member-chip" onclick="selectPaymentMethod('other', this)">📝 Other</div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn secondary" onclick="closeModal('settleModal')">Cancel</button>
+                <button class="modal-btn primary" onclick="handleSettle()">Record Payment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    
+    <!-- App Scripts -->
+    <script src="config/firebase-config.js"></script>
+    <script src="js/app.js"></script>
+    
+    <!-- UI Scripts -->
+    <script>
+        // ==========================================
+        // UI HELPER FUNCTIONS
+        // ==========================================
+        
+        let selectedGroupIcon = '🏠';
+        let selectedGroupMembers = [];
+        let selectedExpenseGroup = null;
+        let selectedPayer = 'me';
+        let selectedSplitMethod = 'equal';
+        let selectedPaymentMethod = 'cash';
+        let currentSettleData = null;
+        let friendsData = [];
+        let groupsData = [];
+
+        // Auth tab switching
+        function showAuthTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.auth-tab[onclick*="${tab}"]`).classList.add('active');
+            
+            document.getElementById('signinForm').style.display = tab === 'signin' ? 'flex' : 'none';
+            document.getElementById('signupForm').style.display = tab === 'signup' ? 'flex' : 'none';
+        }
+
+        // Handle sign in form
+        async function handleSignIn(e) {
+            e.preventDefault();
+            const email = document.getElementById('signinEmail').value;
+            const password = document.getElementById('signinPassword').value;
+            await signIn(email, password);
+        }
+
+        // Handle sign up form
+        async function handleSignUp(e) {
+            e.preventDefault();
+            const name = document.getElementById('signupName').value;
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+            await signUp(email, password, name);
+        }
+
+        // Page switching
+        function switchPage(page) {
+            document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+            document.getElementById(`page-${page}`).style.display = 'block';
+            
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.querySelector(`.nav-item[onclick*="${page}"]`).classList.add('active');
+        }
+
+        // Modal functions
+        function openModal(type) {
+            const modalId = type + 'Modal';
+            document.getElementById(modalId).classList.add('active');
+            document.body.style.overflow = 'hidden';
+            
+            // Update modal content based on type
+            if (type === 'createGroup') {
+                renderGroupMemberSelect();
+            } else if (type === 'addExpense') {
+                renderExpenseGroupSelect();
+            }
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        // Close modal on overlay click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('active');
+                    document.body.style.overflow = '';
+                }
+            });
+        });
+
+        // Group icon selection
+        function selectGroupIcon(icon, element) {
+            selectedGroupIcon = icon;
+            document.querySelectorAll('#groupIconSelect .member-chip').forEach(c => c.classList.remove('selected'));
+            element.classList.add('selected');
+        }
+
+        // Render group member select
+        function renderGroupMemberSelect() {
+            const container = document.getElementById('groupMemberSelect');
+            selectedGroupMembers = [];
+            
+            if (friendsData.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">Add friends first to add them to groups</p>';
+                return;
+            }
+            
+            container.innerHTML = friendsData.map(friend => `
+                <div class="member-chip" data-id="${friend.oderId}" onclick="toggleGroupMember('${friend.oderId}', this)">
+                    <div class="member-chip-avatar">${friend.displayName.charAt(0).toUpperCase()}</div>
+                    <span class="member-chip-name">${friend.displayName}</span>
+                </div>
+            `).join('');
+        }
+
+        function toggleGroupMember(friendId, element) {
+            element.classList.toggle('selected');
+            if (selectedGroupMembers.includes(friendId)) {
+                selectedGroupMembers = selectedGroupMembers.filter(id => id !== friendId);
+            } else {
+                selectedGroupMembers.push(friendId);
+            }
+        }
+
+        // Handle add friend
+        async function handleAddFriend() {
+            const email = document.getElementById('friendEmailInput').value.trim();
+            if (!email) {
+                showToast('Please enter an email', 'error');
+                return;
+            }
+            
+            const success = await sendFriendRequest(email);
+            if (success) {
+                document.getElementById('friendEmailInput').value = '';
+                closeModal('addFriendModal');
+            }
+        }
+
+        // Handle create group
+        async function handleCreateGroup() {
+            const name = document.getElementById('groupNameInput').value.trim();
+            if (!name) {
+                showToast('Please enter a group name', 'error');
+                return;
+            }
+            
+            await createGroup(name, selectedGroupIcon, selectedGroupMembers);
+            document.getElementById('groupNameInput').value = '';
+            selectedGroupMembers = [];
+            closeModal('createGroupModal');
+        }
+
+        // Render expense group select
+        function renderExpenseGroupSelect() {
+            const container = document.getElementById('expenseGroupSelect');
+            
+            if (groupsData.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">Create a group first</p>';
+                return;
+            }
+            
+            container.innerHTML = groupsData.map(group => `
+                <div class="member-chip ${selectedExpenseGroup === group.id ? 'selected' : ''}" 
+                     data-id="${group.id}" onclick="selectExpenseGroup('${group.id}', this)">
+                    <div class="member-chip-avatar" style="background: linear-gradient(135deg, var(--accent-purple), #7c3aed);">${group.icon}</div>
+                    <span class="member-chip-name">${group.name}</span>
+                </div>
+            `).join('');
+        }
+
+        function selectExpenseGroup(groupId, element) {
+            selectedExpenseGroup = groupId;
+            document.querySelectorAll('#expenseGroupSelect .member-chip').forEach(c => c.classList.remove('selected'));
+            element.classList.add('selected');
+            
+            // Update payer select based on group members
+            const group = groupsData.find(g => g.id === groupId);
+            if (group) {
+                renderPayerSelect(group.members);
+            }
+        }
+
+        function renderPayerSelect(members) {
+            const container = document.getElementById('expensePayerSelect');
+            container.innerHTML = members.map(member => `
+                <div class="member-chip ${member.id === selectedPayer ? 'selected' : ''}" 
+                     data-payer="${member.id}" onclick="selectPayer('${member.id}', this)">
+                    <div class="member-chip-avatar">${member.displayName.charAt(0).toUpperCase()}</div>
+                    <span class="member-chip-name">${member.displayName}</span>
+                </div>
+            `).join('');
+        }
+
+        function selectPayer(payerId, element) {
+            selectedPayer = payerId;
+            document.querySelectorAll('#expensePayerSelect .member-chip').forEach(c => c.classList.remove('selected'));
+            element.classList.add('selected');
+        }
+
+        function selectSplitMethod(method, element) {
+            selectedSplitMethod = method;
+            document.querySelectorAll('.split-method').forEach(m => m.classList.remove('active'));
+            element.classList.add('active');
+        }
+
+        // Handle add expense
+        async function handleAddExpense() {
+            const description = document.getElementById('expenseDescInput').value.trim();
+            const amount = parseFloat(document.getElementById('expenseAmountInput').value);
+            
+            if (!selectedExpenseGroup) {
+                showToast('Please select a group', 'error');
+                return;
+            }
+            if (!description) {
+                showToast('Please enter a description', 'error');
+                return;
+            }
+            if (!amount || amount <= 0) {
+                showToast('Please enter a valid amount', 'error');
+                return;
+            }
+            
+            // Get group members for splits
+            const group = groupsData.find(g => g.id === selectedExpenseGroup);
+            const splits = group.members.map(member => ({
+                oderId: member.id,
+                displayName: member.displayName,
+                amount: amount / group.members.length,
+                isPaid: false
+            }));
+            
+            await addExpense(selectedExpenseGroup, description, amount, selectedPayer, selectedSplitMethod, splits);
+            
+            document.getElementById('expenseDescInput').value = '';
+            document.getElementById('expenseAmountInput').value = '';
+            closeModal('addExpenseModal');
+        }
+
+        function selectPaymentMethod(method, element) {
+            selectedPaymentMethod = method;
+            document.querySelectorAll('#settleModal .member-chip').forEach(c => c.classList.remove('selected'));
+            element.classList.add('selected');
+        }
+
+        // Open settle modal
+        function openSettleModal(toUserId, toUserName, amount, groupId) {
+            currentSettleData = { toUserId, groupId };
+            document.getElementById('settleToUser').innerHTML = `
+                <div class="member-chip-avatar">${toUserName.charAt(0).toUpperCase()}</div>
+                <span class="member-chip-name">${toUserName}</span>
+            `;
+            document.getElementById('settleAmountInput').value = amount.toFixed(2);
+            openModal('settle');
+        }
+
+        // Handle settle
+        async function handleSettle() {
+            const amount = parseFloat(document.getElementById('settleAmountInput').value);
+            if (!amount || amount <= 0) {
+                showToast('Please enter a valid amount', 'error');
+                return;
+            }
+            
+            await createSettlement(currentSettleData.groupId, currentSettleData.toUserId, amount, selectedPaymentMethod);
+            closeModal('settleModal');
+        }
+
+        // Render functions
+        function renderGroups(groups) {
+            groupsData = groups;
+            const container = document.getElementById('groupsList');
+            
+            if (groups.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">👥</div>
+                        <h3 class="empty-title">No groups yet</h3>
+                        <p class="empty-text">Create a group to start splitting expenses</p>
+                        <button class="empty-btn" onclick="openModal('createGroup')">Create Group</button>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = groups.map(group => `
+                <div class="group-card" onclick="viewGroup('${group.id}')">
+                    <div class="group-header">
+                        <div class="group-icon">${group.icon}</div>
+                        <div class="group-info">
+                            <div class="group-name">${group.name}</div>
+                            <div class="group-members">${group.members.length} members</div>
+                        </div>
+                        <div class="group-balance">
+                            <div class="group-balance-value">${formatCurrency(group.totalExpenses || 0)}</div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderFriends(friends) {
+            friendsData = friends;
+            const container = document.getElementById('friendsList');
+            
+            if (friends.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">👤</div>
+                        <h3 class="empty-title">No friends yet</h3>
+                        <p class="empty-text">Add friends to split expenses together</p>
+                        <button class="empty-btn" onclick="openModal('addFriend')">Add Friend</button>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = friends.map(friend => `
+                <div class="friend-card">
+                    <div class="friend-avatar">${friend.displayName.charAt(0).toUpperCase()}</div>
+                    <div class="friend-info">
+                        <div class="friend-name">${friend.displayName}</div>
+                        <div class="friend-email">${friend.email}</div>
+                    </div>
+                    <div class="friend-actions">
+                        <button class="friend-action-btn reject" onclick="removeFriend('${friend.friendshipId}')" title="Remove">🗑️</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderPendingRequests(requests) {
+            const section = document.getElementById('pendingSection');
+            const container = document.getElementById('pendingList');
+            
+            if (requests.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            section.style.display = 'block';
+            
+            // Filter to show only requests sent TO me (not by me)
+            const incomingRequests = requests.filter(r => r.requestedBy !== currentUser?.uid);
+            
+            if (incomingRequests.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            container.innerHTML = incomingRequests.map(request => `
+                <div class="friend-card">
+                    <div class="friend-avatar">${request.displayName.charAt(0).toUpperCase()}</div>
+                    <div class="friend-info">
+                        <div class="friend-name">${request.displayName}</div>
+                        <div class="friend-email">${request.email}</div>
+                    </div>
+                    <div class="friend-actions">
+                        <button class="friend-action-btn accept" onclick="acceptFriendRequest('${request.friendshipId}')" title="Accept">✓</button>
+                        <button class="friend-action-btn reject" onclick="removeFriend('${request.friendshipId}')" title="Reject">✕</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function viewGroup(groupId) {
+            // Navigate to group detail view
+            console.log('View group:', groupId);
+            // TODO: Implement group detail view
+        }
+
+        // Theme toggle
+        function toggleTheme() {
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+            localStorage.setItem('theme', isDark ? 'light' : 'dark');
+        }
+
+        // Load saved theme
+        const savedTheme = localStorage.getItem('theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+
+        // Toast function (if not defined in app.js)
+        if (typeof showToast !== 'function') {
+            window.showToast = function(message, type = 'success') {
+                const toast = document.getElementById('toast');
+                if (toast) {
+                    toast.textContent = message;
+                    toast.className = `toast ${type} show`;
+                    setTimeout(() => {
+                        toast.className = 'toast';
+                    }, 3000);
+                }
+            };
+        }
+
+        // Make functions globally available
+        window.showAuthTab = showAuthTab;
+        window.handleSignIn = handleSignIn;
+        window.handleSignUp = handleSignUp;
+        window.switchPage = switchPage;
+        window.openModal = openModal;
+        window.closeModal = closeModal;
+        window.selectGroupIcon = selectGroupIcon;
+        window.toggleGroupMember = toggleGroupMember;
+        window.handleAddFriend = handleAddFriend;
+        window.handleCreateGroup = handleCreateGroup;
+        window.selectExpenseGroup = selectExpenseGroup;
+        window.selectPayer = selectPayer;
+        window.selectSplitMethod = selectSplitMethod;
+        window.handleAddExpense = handleAddExpense;
+        window.selectPaymentMethod = selectPaymentMethod;
+        window.openSettleModal = openSettleModal;
+        window.handleSettle = handleSettle;
+        window.renderGroups = renderGroups;
+        window.renderFriends = renderFriends;
+        window.renderPendingRequests = renderPendingRequests;
+        window.viewGroup = viewGroup;
+        window.toggleTheme = toggleTheme;
+    </script>
+</body>
+</html>
