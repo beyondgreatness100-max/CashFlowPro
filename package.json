@@ -1,0 +1,24 @@
+{
+  "name": "splitcost-realtime",
+  "version": "1.0.0",
+  "description": "Real-time split cost API with Cloudflare Workers, D1, and Durable Objects",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create splitcost-db",
+    "db:migrate": "wrangler d1 execute splitcost-db --file=./schema.sql",
+    "db:migrate:prod": "wrangler d1 execute splitcost-db --file=./schema.sql --remote",
+    "db:studio": "wrangler d1 execute splitcost-db --command 'SELECT 1'",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "nanoid": "^5.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "typescript": "^5.0.0",
+    "wrangler": "^3.0.0"
+  }
+}

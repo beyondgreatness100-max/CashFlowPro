@@ -1,0 +1,41 @@
+# =====================================================
+# SPLITCOST REAL-TIME - CLOUDFLARE WORKER CONFIG
+# =====================================================
+
+name = "splitcost-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+node_compat = true
+
+# Environment variables
+[vars]
+ENVIRONMENT = "development"
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "splitcost-db"
+database_id = "YOUR_DATABASE_ID_HERE"  # Get this after running: wrangler d1 create splitcost-db
+
+# Durable Object binding
+[durable_objects]
+bindings = [
+  { name = "SPLITCOST_DO", class_name = "SplitCostDurableObject" }
+]
+
+# Migrations for Durable Objects
+[[migrations]]
+tag = "v1"
+new_classes = ["SplitCostDurableObject"]
+
+# Secret (set via: wrangler secret put JWT_SECRET)
+# JWT_SECRET = "your-secret-key"
+
+# Production environment
+[env.production]
+vars = { ENVIRONMENT = "production" }
+
+# Routes
+# routes = [
+#   { pattern = "api.splitcost.app/*", zone_name = "splitcost.app" }
+# ]
